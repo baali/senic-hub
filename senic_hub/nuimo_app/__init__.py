@@ -2,19 +2,25 @@ import logging
 
 from importlib import import_module
 from threading import Thread
+import threading
 
 import ctypes
 import mmap
 import os
 import struct
+import socket
+import binascii
 
 from nuimo import (Controller, ControllerListener, ControllerManager, Gesture, LedMatrix)
 
 from . import matrices
+from . import KNXNuimoServer as KNS
 
 import time
 
 logger = logging.getLogger(__name__)
+
+KNX_DISPLAY_MATRIX = ""
 
 
 class NuimoControllerListener(ControllerListener):
@@ -51,6 +57,7 @@ class NuimoControllerListener(ControllerListener):
         mac = self.controller.mac_address
         logger.info("Received gesture event to Nuimo controller %s", mac)
         self.process_gesture_event(event)
+
 
 
 class NuimoApp(NuimoControllerListener):
@@ -92,6 +99,38 @@ class NuimoApp(NuimoControllerListener):
         offset = struct.calcsize(self.bl._type_)
         assert buf[offset] == 0
 
+
+        ##### SOCKET SERVER UDP #######
+        # self.server_address = 'localhost'
+        # self.server_port = 55555
+        # self.nuimoserversock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        # self.nuimoserversock.bind((self.server_address, self.server_port))
+        # self.nuimoserversock.listen(5)
+        # logger.info('Socket Server initialized on port 55555 : Listening to Max. 5 connections')
+
+        ###############################
+
+        # class NuimoKNXClient(Thread):
+        #     def __init__(self, socket, address):
+        #         Thread.__init__(self)
+        #         self.sock = socket
+        #         self.addr = address
+        #         self.start()
+        #
+        #         def run(self):
+        #             while 1:
+        #                 print('Client sent:', self.sock.recv(1024).decode())
+        #                 self.sock.send(b'1')
+
+
+
+        self.client_address = '127.0.0.1'
+        self.client_port = 55556
+        self.nuimo_client_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+        # self.nuimo_client_sock.connect((self.client_address, self.client_port))
+
+
     def set_components(self, components):
         previously_active = self.active_component
         if self.active_component:
@@ -112,6 +151,7 @@ class NuimoApp(NuimoControllerListener):
             self.set_active_component()
 
     def start(self, ipc_queue):
+
         ipc_thread = Thread(target=self.listen_to_ipc_queue, args=(ipc_queue,), daemon=True)
         ipc_thread.start()
 
@@ -122,15 +162,28 @@ class NuimoApp(NuimoControllerListener):
         self.manager.is_adapter_powered = True
 
         self.controller = Controller(self.mac_address, self.manager)
+
+        knx_client_address = '127.0.0.1'
+        knx_client_port = 55555
+
         self.controller.listener = self
         self.set_active_component()
         logger.info("Connecting to Nuimo controller %s", self.controller.mac_address)
         self.controller.connect()
+
+        get_knx_client_data = Thread(
+            target=self.listen_nuimo_server,
+            args=(self.controller, knx_client_address, knx_client_port,),
+            daemon=True)
+
+        get_knx_client_data.start()
+
         try:
             self.manager.run()
         except KeyboardInterrupt:
             logger.info("Nuimo app received SIGINT %s", self.controller.mac_address)
             self.stop()
+
 
     def stop(self):
         logger.info("Stopping nuimo app of %s ...", self.controller.mac_address)
@@ -178,21 +231,27 @@ class NuimoApp(NuimoControllerListener):
                 return
             else:
                 self.show_error_matrix()
-                return
+                return# self.nuimo_client_sock.connect((self.client_address, self.client_port))
 
         # Process gestures for devices having no IP address in nuimo_app.cfg
         self.process_gesture_event(event.gesture, event.value)
 
     def process_internal_gesture(self, gesture):
         if gesture == Gesture.SWIPE_UP:
-            component = self.get_prev_component()
-            if component:
-                self.set_active_component(component)
+            msg = [0x02, 0x02, 0x00, 0x00]
+            msgstr = ""
+            for m in msg:
+                msgstr+=chr(m)
+            self.nuimo_client_sock.sendto(msgstr.encode(), (self.client_address, self.client_port))
+            logger.info("SENT DATA TO SERVER" + str(2000))
 
         elif gesture == Gesture.SWIPE_DOWN:
-            component = self.get_next_component()
-            if component:
-                self.set_active_component(component)
+            msg = [0x02, 0x03, 0x00, 0x00]
+            msgstr = ""
+            for m in msg:
+                msgstr+=chr(m)
+            self.nuimo_client_sock.sendto(msgstr.encode(), (self.client_address, self.client_port))
+            logger.info("SENT DATA TO SERVER : " + str(2100))
 
         elif gesture in self.TOUCH_GESTURES:
             # Fall-through to show active component...
@@ -202,25 +261,78 @@ class NuimoApp(NuimoControllerListener):
 
     def process_gesture(self, gesture, delta):
         if gesture == Gesture.ROTATION:
-            self.active_component.on_rotation(delta / 1800)  # 1800 is the amount of all ticks for a full ring rotation
+            logger.info("DELTA VALUE: " + str(int(delta/10)))
+            msg = [0x04]
+            if delta > 0:
+                 msg.append(0x01)
+                 del_2 = int(delta/10)
+
+            else:
+                 msg.append(0x00)
+                 del_2 = int(-1*delta/10)
+
+            msg.append((del_2 >> 8) & 0xFF)
+            msg.append(del_2 & 0xFF)
+            msgstr = ""
+            for m in msg:
+                msgstr+=chr(m)
+
+            self.nuimo_client_sock.sendto(msgstr.encode(), (self.client_address, self.client_port))
+            logger.info("SENT DATA TO SERVER : ")
 
         if gesture == Gesture.BUTTON_PRESS:
-            self.active_component.on_button_press()
+            msg = [0x01, 0x00, 0x00, 0x00]
+            msgstr = ""
+            for m in msg:
+                msgstr+=chr(m)
+            self.nuimo_client_sock.sendto(msgstr.encode(), (self.client_address, self.client_port))
+            logger.info("SENT DATA TO SERVER : " + str(1000))
+            logger.info(self.controller)
 
         elif gesture == Gesture.SWIPE_LEFT:
-            self.active_component.on_swipe_left()
+            msg = [0x02, 0x00, 0x00, 0x00]
+            msgstr = ""
+            for m in msg:
+                msgstr+=chr(m)
+            # self.active_component.on_swipe_left()
+            self.nuimo_client_sock.sendto(msgstr.encode(), (self.client_address, self.client_port))
+            logger.info("SENT DATA TO SERVER : " + str(3000))
 
         elif gesture == Gesture.SWIPE_RIGHT:
-            self.active_component.on_swipe_right()
+            msg = [0x02, 0x01, 0x00, 0x00]
+            msgstr = ""
+            for m in msg:
+                msgstr+=chr(m)
+            # self.active_component.on_swipe_right()
+            self.nuimo_client_sock.sendto(msgstr.encode(), (self.client_address, self.client_port))
+            logger.info("SENT DATA TO SERVER : " + str(3100))
 
         elif gesture == Gesture.LONGTOUCH_LEFT:
-            self.active_component.on_longtouch_left()
+            # self.active_component.on_longtouch_left()
+            msg = [0x02, 0x08, 0x00, 0x00]
+            msgstr = ""
+            for m in msg:
+                msgstr+=chr(m)
+            self.nuimo_client_sock.sendto(msgstr.encode(), (self.client_address, self.client_port))
+            logger.info("SENT DATA TO SERVER" + str(2000))
 
         elif gesture == Gesture.LONGTOUCH_BOTTOM:
-            self.active_component.on_longtouch_bottom()
+            # self.active_component.on_longtouch_bottom()
+            msg = [0x02, 0x0B, 0x00, 0x00]
+            msgstr = ""
+            for m in msg:
+                msgstr+=chr(m)
+            self.nuimo_client_sock.sendto(msgstr.encode(), (self.client_address, self.client_port))
+            logger.info("SENT DATA TO SERVER" + str(2000))
 
         elif gesture == Gesture.LONGTOUCH_RIGHT:
-            self.active_component.on_longtouch_right()
+            # self.active_component.on_longtouch_right()
+            msg = [0x02, 0x09, 0x00, 0x00]
+            msgstr = ""
+            for m in msg:
+                msgstr+=chr(m)
+            self.nuimo_client_sock.sendto(msgstr.encode(), (self.client_address, self.client_port))
+            logger.info("SENT DATA TO SERVER" + str(2000))
 
         else:
             # TODO handle all remaining gestures...
@@ -278,9 +390,32 @@ class NuimoApp(NuimoControllerListener):
     def show_error_matrix(self):
         self.display_matrix(matrices.ERROR)
 
-    def display_matrix(self, matrix, **kwargs):
-        self.controller.display_matrix(LedMatrix(matrix), **kwargs)
+    def show_custom_matrix(self, matrix_string):
+        self.display_matrix(matrix_string)
 
+    def display_matrix(self, matrix):
+        self.controller.display_matrix(LedMatrix(matrix))
+
+    def register_knx_app(self, register_data):
+        nuimo_app_config_path = '/data/senic-hub/nuimo_app.cfg'
+
+        data = {'device_ids': ['knx-light-1'],
+                    'id': '123abc',
+                    'is_reachable': True,
+                    'name': 'KNX',
+                    'type': 'knx'}
+
+        with open(nuimo_app_config_path, 'r+') as f:
+            config = yaml.load(f)
+
+            for mac_address in config['nuimos']:
+                config['nuimos'][mac_address]['components'].append(data)
+
+            f.seek(0)
+            yaml.dump(config, f, default_flow_style=False)
+            logger.info('KNX is now registered')
+
+###################################################################################
     def listen_to_ipc_queue(self, ipc_queue):
         """
         Checks an inter-process queue for new messages. The messages have a simple custom format
@@ -301,6 +436,48 @@ class NuimoApp(NuimoControllerListener):
                 logger.info("IPC stop() received %s", self.controller.mac_address)
                 self.stop()
                 return
+
+###################################################################################
+
+    def listen_nuimo_server(self, controller, addr, port):
+        logger.info("Reached Here! :" )
+        nuimoserversock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        nuimoserversock.bind((addr, port))
+        logger.info("Nuimo Server bound to receive on " + addr + ", on port " + str(port))
+
+        while True:
+            data, address = nuimoserversock.recvfrom(1024)
+            description = hex(ord(data[:1]))
+            self.process_knx_data(controller, description, data)
+
+
+
+#####################################################################################
+
+
+    def process_knx_data(self, controller, desc, data):
+        processed_data = "".join(["{0:08b}".format(b) for b in data[1:]])[0:-7]
+        logger.info("PROCESSED INCOMING DATA : " + desc + " -- " + processed_data)
+
+        if desc == '0x30':
+            controller.display_matrix(LedMatrix(processed_data))
+        elif ('0x05' == desc): # Register
+            logger.info("Register command")
+            register_data = 'foo'
+            self.register_knx_app(register_data)
+        elif ('0x06' == desc): # Switch
+            logger.info("Switch command")
+        elif ('0x07' == desc): # Scale
+            logger.info("Scale command")
+        elif ('0x08' == desc): # TriggerScene
+            logger.info("TriggerScene command")
+        elif ('0x09' == desc): # SwitchState
+            logger.info("SwitchState command")
+        elif ('0x0A' == desc or '0xa' == desc): # ScalingState
+            logger.info("ScalingState command")
+        else:
+            logger.info("Unknown command")
+
 
     def check_nuimo_connection(self):
         while True:

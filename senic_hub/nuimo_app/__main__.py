@@ -10,12 +10,16 @@ from multiprocessing import Process, Queue
 import click
 import platform
 
+import socket
+import sys
+
 if platform.system() == 'Linux':
     import pyinotify
 
 from pyramid.paster import get_app
 
 from . import NuimoApp
+# from . import KNXNuimoServer as KNS
 
 
 logger = logging.getLogger(__name__)
@@ -43,6 +47,8 @@ def main(config):
     nuimo_apps = {}
     queues = {}
     processes = {}
+
+
     # creating initial nuimo apps:
     update_from_config_file(config_path, queues, nuimo_apps, processes, ha_api_url, ble_adapter_name)
 
@@ -57,6 +63,7 @@ def main(config):
 
     try:
         with open(config_path, 'r') as f:
+
             config = yaml.load(f)
         for mac_addr in config['nuimos']:
             components = config['nuimos'][mac_addr].get('components', [])
@@ -66,6 +73,8 @@ def main(config):
             nuimo_apps[mac_addr] = components
             processes[mac_addr] = Process(target=app.start, args=(ipc_queue,))
             processes[mac_addr].start()
+            # K = KNXNuimoServer('localhost', 55555)
+            # K.run_server()
 
     except FileNotFoundError as e:
         logger.error(e)
@@ -106,6 +115,7 @@ def update_from_config_file(config_path, queues, nuimo_apps, processes, ha_api_u
 
     except FileNotFoundError as e:
         logger.error(e)
+
 
 
 def watch_config_changes(config_path, queues, nuimo_apps, processes, ha_api_url, ble_adapter_name):

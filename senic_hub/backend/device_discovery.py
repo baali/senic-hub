@@ -293,6 +293,11 @@ class PhilipsHueBridgeApiClient:
         url = "{}/{}/lights".format(self.bridge_url, self.username)
         return self._request(url)
 
+    @username_required
+    def get_config(self):  # pragma: no cover
+        url = "{}/{}/config".format(self.bridge_url, self.username)
+        return self._request(url)
+
 
 class SonosSpeakerDeviceDescription:
     def __init__(self, device_info):

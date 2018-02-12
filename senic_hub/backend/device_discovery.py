@@ -294,7 +294,7 @@ class PhilipsHueBridgeApiClient:
         return self._request(url)
 
     @username_required
-    def get_config(self):  # pragma: no cover
+    def get_config(self):
         url = "{}/{}/config".format(self.bridge_url, self.username)
         return self._request(url)
 

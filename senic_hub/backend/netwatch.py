@@ -23,6 +23,11 @@ if os.path.isfile('/etc/senic_hub.ini'):
         '/etc/senic_hub.ini', disable_existing_loggers=False
     )
 
+import loggly.handlers
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+logging.config.fileConfig(
+    os.path.join(BASE_DIR, '../logs.conf'), disable_existing_loggers=False)
 
 logger = logging.getLogger(__name__)
 
